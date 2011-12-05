@@ -7,6 +7,7 @@
 #include <QString>
 #include <QPainter>
 #include <QLayout>
+#include <QHBoxLayout>
 #include <iostream>
 #include <ctime>
 using namespace std;
@@ -40,7 +41,11 @@ QSSnake::QSSnake() : QMainWindow(0, 0) {
 	connect(quit, SIGNAL(triggered()), qApp, SLOT(quit()));
 	connect(new_game, SIGNAL(triggered()), this, SLOT(startGame()));
 
-	canvas = new Canvas(this);
+	QLabel* scoreLabel = new QLabel("");
+	tool_bar->addSeparator();
+	tool_bar->addWidget(scoreLabel);
+
+	canvas = new Canvas(this, scoreLabel);
 	setCentralWidget(canvas);
 
 	srand(time(NULL));
@@ -55,10 +60,15 @@ void QSSnake::keyPressEvent(QKeyEvent* event) {
 	canvas->keyPressEvent(event);
 }
 
-QSSnake::Canvas::Canvas(QWidget* parent) : QWidget(parent) {
+QSSnake::Canvas::Canvas(QWidget* parent, QLabel* score_label) : QWidget(parent) {
 	snake = NULL;
 	timerId = -1;
 	in_game = false;
+	ignore_keys = false;
+	bonus_in_game = false;
+	score = 0;
+	this->score_label = score_label;
+	score_label->show();
 }
 
 void QSSnake::Canvas::initGame() {
@@ -67,9 +77,14 @@ void QSSnake::Canvas::initGame() {
 	direction = 0x00;
 	dots_size = 8;
 	in_game = false;
+	score = 0;
+	ignore_keys = false;
 	timerId = startTimer(80);
+	bonus_in_game = false;
+	bonus_direction = 0x00;
 	snake_size = 1;
 	max_dots = (width() / dots_size) * (height() * dots_size);
+	updateScoreLabel();
 	if(snake != NULL)
 		delete[] snake;
 	snake = new QPoint[max_dots];
@@ -96,32 +111,45 @@ void QSSnake::Canvas::paintEvent(QPaintEvent* event) {
 	painter.setBrush(QBrush("#C7B100"));
 	painter.setPen(QColor("#C7B100"));
 	painter.drawEllipse(food.x(), food.y(), dots_size, dots_size);
+	
+	if(bonus_in_game) {
+		painter.setBrush(QBrush("#00A1FF"));
+		painter.setPen(QColor("#00A1FF"));
+		painter.drawEllipse(bonus.x(), bonus.y(), dots_size, dots_size);
+	}
+
 }
 
 void QSSnake::Canvas::keyPressEvent(QKeyEvent* event) {
+	if(ignore_keys)
+		return;
 	switch(event->key()) {
 		case Qt::Key_Up: {
 			if(direction == 0x04 && snake_size > 1)
 				return;
 			direction = 0x01;	
+			ignore_keys = true;
 		}
 		break;
 		case Qt::Key_Right: {
 			if(direction == 0x08 && snake_size > 1)
 				return;
 			direction = 0x02;
+			ignore_keys = true;
 		}
 		break;
 		case Qt::Key_Down: {
 			if(direction == 0x01 && snake_size > 1)
 				return;
 			direction = 0x04;
+			ignore_keys = true;
 		}
 		break;
 		case Qt::Key_Left: {
 			if(direction == 0x02 && snake_size > 1)
 				return;
 			direction = 0x08;
+			ignore_keys = true;
 		}
 		break;
 	}
@@ -130,6 +158,17 @@ void QSSnake::Canvas::keyPressEvent(QKeyEvent* event) {
 void QSSnake::Canvas::timerEvent(QTimerEvent* event) {
 	moveSnake();
 	checkCollisions();
+	ignore_keys = false;
+	if(score > 30 && direction != 0 && !bonus_in_game) {
+		if(rand() % 250 == 5) {
+			bonus_in_game = true;
+			initBonus();
+		}
+	} else {
+		if(direction != 0)
+			moveBonus();
+	}
+	updateScoreLabel();
 	repaint();
 }
 
@@ -154,11 +193,11 @@ void QSSnake::Canvas::moveSnake() {
 			snake[0] += QPoint(-1 * dots_size, 0);
 		break;
 	}
-	if(snake[0].x() > width())
+	if(snake[0].x() >= width())
 		snake[0].setX(0);
 	if(snake[0].x() < 0)
 		snake[0].setX((width() / dots_size) * dots_size);
-	if(snake[0].y() > height())
+	if(snake[0].y() >= height())
 		snake[0].setY(0);
 	if(snake[0].y() < 0)
 		snake[0].setY((height() / dots_size) * dots_size);
@@ -174,16 +213,90 @@ void QSSnake::Canvas::locateFood() {
 }
 
 void QSSnake::Canvas::checkCollisions() {
-	if(food.x() == snake[0].x() && food.y() == snake[0].y()) {
+	if(snake[0] == food) {
 		snake[snake_size] = QPoint(-100, -100);
 		++snake_size;
+		score += 2;
 		locateFood();
 	}
-	for(int i = 1; i < snake_size; ++i) {
-		if(snake[i] == snake[0]) {
-			initGame();
-			in_game = true;
+	if(snakeCollision(snake[0], true)) {
+		initGame();
+		in_game = true;
+	}
+	if(snake[0] == bonus) {
+		bonus_in_game = false;
+		score += 10;
+		for(int i = snake_size; i < snake_size + 5; ++i) {
+			snake[i] = QPoint(-100, -100);
+		}
+		snake_size += 5;
+	}
+}
+
+void QSSnake::Canvas::moveBonus() {	
+	if(rand() % 5 == 1)
+		bonus_direction = 0;
+	QPoint tmp_pos = bonus;
+	while(true) {
+		if(bonus_direction == 0) {
+			while(bonus_direction == 0 || bonus_direction % 2 != 0) {
+				bonus_direction = rand() % 8 + 1;
+				if(bonus_direction == 1)
+					break;
+			}
+		}
+		switch(bonus_direction) {
+			case 0x01: {
+				bonus += QPoint(0, -1 * dots_size);
+			}
+			break;
+			case 0x02: {
+				bonus += QPoint(dots_size, 0);
+			}
+			break;
+			case 0x04: {
+				bonus += QPoint(0, dots_size);
+			}
+			break;
+			case 0x08: {
+				bonus += QPoint(-1 * dots_size, 0);
+			}
 			break;
 		}
+		if(snakeCollision(bonus, true)) {
+			bonus_direction = 0;
+			bonus = tmp_pos;
+			continue;
+		}
+		if(bonus.x() >= width())
+			bonus.setX(0);
+		if(bonus.x() < 0)
+			bonus.setX((width() / dots_size) * dots_size);
+		if(bonus.y() >= height())
+			bonus.setY(0);
+		if(bonus.y() < 0)
+			bonus.setY((height() / dots_size) * dots_size);
+		break;
 	}
+}
+
+void QSSnake::Canvas::initBonus() {
+	bonus = snake[0];
+	bonus_direction = 0;
+	while(snakeCollision(bonus)) {
+		bonus.setX((rand() % (width() / dots_size)) * dots_size);
+		bonus.setY((rand() % (height() / dots_size)) * dots_size);
+	}
+}
+
+bool QSSnake::Canvas::snakeCollision(const QPoint& p, bool skip_head) const {
+	for(int i = (skip_head ? 1 : 0); i < snake_size; ++i) {
+		if(p == snake[i])
+			return true;
+	}
+	return false;
+}
+
+void QSSnake::Canvas::updateScoreLabel() {
+	score_label->setText(QString("Score: ") + QString::number(score));
 }
